@@ -7,19 +7,13 @@ import java.util.function.Function;
 import java.util.function.Supplier;
 
 public class Completavel <T>{
-private  StackCOmpletable stackCOmpletable;
+private volatile StackCOmpletable stackCOmpletable;
 
 private Completavel(){}
 private volatile Object resultado=null;
-private static VarHandle STACK;
-static {
-    try{
-    STACK= MethodHandles.lookup().findVarHandle(Completavel.class,"stackCOmpletable",StackCOmpletable.class);
-    }catch (Exception e){
-        e.printStackTrace();
-        throw new RuntimeException("falha ao iniciar o var handler");
-    }
-}
+
+private Object lock= new Object();
+
 
 private static class TarefaExecutavel<T> implements Runnable{
 
@@ -51,30 +45,72 @@ private static class TarefaExecutavel<T> implements Runnable{
 }
 
 public void SetResult(Object o){
-    resultado=o;
-    if(stackCOmpletable!=null)
-    stackCOmpletable.execute(resultado);
+    StackCOmpletable fila =null;
+    synchronized (lock){
+        if(resultado!=null)return;
+        resultado=o;
+        System.out.println("Sete result foi chamado com sucesso  valor do resultado "+resultado);
+        System.out.println("Valor da stack "+stackCOmpletable);
+        fila=stackCOmpletable;
+        stackCOmpletable=null;
+       lock.notifyAll();
+    }
+
+    if(fila!=null){
+        percorerPilha(o,fila);
+      }
+
 }
 
-public void espere(){
-    while (resultado==null){
-        try{Thread.sleep(100);}catch (Exception e){e.printStackTrace();}
-        System.out.println(this+" Esperando pelo resultado ");
+private void percorerPilha(Object o,StackCOmpletable stackCOmpletable1){
+    var noAtual=stackCOmpletable1;
+     while (noAtual!=null){
+         System.out.println("valor do no atual "+noAtual+" seu prosimo "+noAtual.prosimo);
+         noAtual.execute(o);
+         noAtual=noAtual.prosimo;
+     }
+}
+
+
+private void clearPilha(StackCOmpletable stackCOmpletable1){
+    var pilha =stackCOmpletable1;
+    while (pilha!=null){
+        var prosimo=pilha.prosimo;
+        pilha.prosimo=null;
+        pilha=prosimo;
     }
+}
+public void espere(){
+ try{synchronized (lock){
+     lock.wait();
+ }
+     }catch (Exception e){}
 
 }
 
 public static<T> Completavel<T> submit(Supplier<T> funcao, ExecutorService ex){
-    var completavel =new Completavel<T>();
-    var tarefa = new TarefaExecutavel(funcao,completavel);
-    ex.submit(tarefa);
-    return completavel;
+
+        var completavel =new Completavel<T>();
+        var tarefa = new TarefaExecutavel(funcao,completavel);
+        ex.submit(tarefa);
+        return completavel;
+
+
 }
 
 public T getReultado(){
-     while (resultado == null){
+    synchronized (lock){
+        while (resultado == null){
+         System.out.println("valor da stacck "+stackCOmpletable);
+           System.out.println("o valor do resultado aonda nao chego entao vou esperar");
 
-     }
+             try {
+                 lock.wait();
+             }catch (Exception e){
+                 e.printStackTrace();
+             }
+         }}
+
     if(resultado instanceof Sucesso<?> s){
         return (T) s.getValor();
     }
@@ -88,21 +124,24 @@ public T getReultado(){
 public<R> Completavel<R> aplicar(Function<T,R>  transformacao ){
     var completable = new Completavel<R>();
     var aplicacao= new Aplicar<T,R>(transformacao,completable);
-    StackCOmpletable stack1;
+    synchronized (lock){
 
-    do{
-        System.out.println("tentado acesar o valor atomico");
-        if(resultado != null){
-         if(resultado instanceof Sucesso<?> s)
-        completable.SetResult( new Sucesso<>( transformacao.apply((T)s.getValor())));
-         else completable.SetResult(resultado);
+        StackCOmpletable stack1;
+       if(resultado==null){
+           setStackCOmpletable(aplicacao);
+           return completable;
+       } }
+
+        try {
+            if(resultado instanceof Sucesso<?> s)
+                completable.SetResult(new Sucesso<>((T) transformacao.apply((T)s.getValor())));
+            if(resultado instanceof  Falhar f) completable.SetResult(f);
+        }catch (Exception e){
+            completable.SetResult(new Falhar(e));
+        }
         return completable;
 
-    }
-       stack1=(StackCOmpletable) STACK.get(this);
 
-    }while (!STACK.compareAndSet(this,stack1,aplicacao));
-    return completable;
 
 
 }
@@ -110,79 +149,113 @@ public<R> Completavel<R> aplicar(Function<T,R>  transformacao ){
 public<R> Completavel<R> mapear(Function<T,R> f){
     var complertable = new Completavel<R>();
     var mapeamento =new Mapear<T,R>(complertable,f);
-    StackCOmpletable stack1;
+    synchronized (lock){
 
-    do{
-        System.out.println("tentado acesar o valor atomico");
-        if(resultado != null){
-            if(resultado instanceof Sucesso<?> s)
-                complertable.SetResult( new Sucesso<>( f.apply((T)s.getValor())));
-            else complertable.SetResult(resultado);
+        if(resultado==null){
+            setStackCOmpletable(mapeamento);
             return complertable;
-
+        } }
+       try {
+            if(resultado instanceof Sucesso<?> s)
+                complertable.SetResult(new Sucesso<>((T) f.apply((T)s.getValor())));
+            if(resultado instanceof  Falhar f1) complertable.SetResult(f1);
+        }catch (Exception e){
+            e.printStackTrace();
+            complertable.SetResult(new Falhar(e));
         }
-        stack1=(StackCOmpletable) STACK.get(this);
+        return complertable;
 
-    }while (!STACK.compareAndSet(this,stack1,mapeamento));
-    return complertable;
+
 }
 
-    public<R> Completavel<R> tratarException(Function<T,R> f){
+    public<R> Completavel<R> tratarException(Function<Throwable,R> f){
+
         var complertable = new Completavel<R>();
-        var mapeamento =new TratarException<T,R>(complertable,f);
-        StackCOmpletable stack1;
+        var exception =new TratarException<T,R>(complertable,f);
+        synchronized (lock){
 
-        do{
-            System.out.println("tentado acesar o valor atomico");
-            if(resultado != null){
-                if(resultado instanceof Sucesso<?> s)
-                    complertable.SetResult( new Sucesso<>( f.apply((T)s.getValor())));
-                else complertable.SetResult(resultado);
+            if(resultado==null){
+                setStackCOmpletable(exception);
                 return complertable;
-
+            }}
+            try {
+                if(resultado instanceof Sucesso<?> s)
+                    complertable.SetResult(s);
+                if(resultado instanceof  Falhar f1){
+                    var tratamento=f.apply(f1.getEx());
+                    complertable.SetResult(new Sucesso<>(tratamento));
+                }
+            }catch (Exception e){
+                e.printStackTrace();
+                complertable.SetResult(new Falhar(e));
             }
-            stack1=(StackCOmpletable) STACK.get(this);
+            return complertable;
 
-        }while (!STACK.compareAndSet(this,stack1,mapeamento));
-        return complertable;
     }
     public<R> Completavel<R> mapearEnOutrsThread(Function<T,R> f,ExecutorService ex){
         var complertable = new Completavel<R>();
         var mapeamento =new AplicarEnOutraThread<>(ex,complertable,f);
-        StackCOmpletable stack1;
 
-        do{
-            System.out.println("tentado acesar o valor atomico");
-           if(resultado != null){
-               ex.submit(()->{
-                   if(resultado instanceof Sucesso<?> s)
-                       complertable.SetResult( new Sucesso<>( f.apply((T)s.getValor())));
-                   else complertable.SetResult(resultado);
-               });
 
+        synchronized (lock){
+
+            if(resultado==null){
+                setStackCOmpletable(mapeamento);
                 return complertable;
-
             }
-            stack1=(StackCOmpletable) STACK.get(this);
-
-        }while (!STACK.compareAndSet(this,stack1,mapeamento));
-        return complertable;
-    }
-
-    public <R> Completavel<R> comsumir(Icomsumir<R> c){
-    var completable = new Completavel<R>();
-    var comsumidor = new Consumidor<R>(completable,c);
-    StackCOmpletable stackCOmpletable1 ;
-    do{
-        System.out.println("tentado mudar o topo da minha pila atual");
-        if(resultado!=null){
-            comsumidor.execute(resultado);
-            completable.SetResult(resultado);
-            return completable;
         }
-        stackCOmpletable1 =(StackCOmpletable) STACK.get(this);
-    }while (!STACK.compareAndSet(this,stackCOmpletable1,comsumidor));
-    return completable;
+            try {
+                if(resultado instanceof Sucesso<?> s)
+                    complertable.SetResult(new Sucesso<>((T) f.apply((T)s.getValor())));
+                if(resultado instanceof  Falhar f1) complertable.SetResult(f1);
+            }catch (Exception e){
+                e.printStackTrace();
+                complertable.SetResult(new Falhar(e));
+            }
+            return complertable;
+
+
+
     }
+
+private void setStackCOmpletable(StackCOmpletable no){
+    if(stackCOmpletable==null){
+        System.out.println("a stack e null vou setala com "+no);
+        stackCOmpletable=no;}
+    else {
+        System.out.println("stack nao e null "+stackCOmpletable+" seu prosimo "+stackCOmpletable.prosimo);
+        var ponteiroAuxilia=stackCOmpletable;
+        no.prosimo=ponteiroAuxilia;
+        stackCOmpletable=no;
+        System.out.println("stack  apos modificaccao "+stackCOmpletable+" seu prosimo "+stackCOmpletable.prosimo);
+    }
+}
+    public <R> Completavel<R> comsumir(Icomsumir<R> c){
+        var completable = new Completavel<R>();
+        var comsumidor = new Consumidor<R>(completable,c);
+        synchronized (lock){
+            System.out.println("Setando a pilha de comsumir");
+
+            if(resultado==null){
+                setStackCOmpletable(comsumidor);
+                return  completable;
+            }}
+
+            try {
+                if(resultado instanceof Sucesso<?> s){
+                    c.comsumir((R)s.getValor());
+                    completable.SetResult(s);
+                }
+
+                if(resultado instanceof  Falhar f1) completable.SetResult(f1);
+            }catch (Exception e){
+                e.printStackTrace();
+                completable.SetResult(new Falhar(e));
+            }
+            return  completable;
+
+
+    }
+
 
 }

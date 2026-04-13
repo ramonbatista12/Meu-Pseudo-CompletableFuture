@@ -2,10 +2,10 @@ package completable;
 
 import java.util.function.Function;
 
-public class TratarException<T ,R> extends StackCOmpletable{
+public class TratarException<Throable ,R> extends StackCOmpletable{
     private Completavel<R> completableAtual;
-    private Function<T  ,R> funcao;
-    public TratarException(Completavel<R> c,Function<T,R> f) {
+    private Function<Throwable  ,R> funcao;
+    public TratarException(Completavel<R> c,Function<Throwable,R> f) {
         super(null);
         completableAtual=c;
         funcao=f;
@@ -15,7 +15,8 @@ public class TratarException<T ,R> extends StackCOmpletable{
     public void execute(Object o) {
         if(o instanceof Falhar f){
             try{
-            var tratamento =funcao.apply((T)f.getEx());
+                Throwable throwable=f.getEx();
+            var tratamento =funcao.apply(f.getEx());
             completableAtual.SetResult(new Sucesso<>(tratamento));
             return;
             }catch (Exception e){
