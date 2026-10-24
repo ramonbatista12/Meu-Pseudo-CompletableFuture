@@ -1,2 +1,10 @@
 # Meu-Pseudo-CompletableFuture
-Projeto aonde eu estudei os mecanismos internos de completable future visando apreder mais sobre como as coisas internas do java funcionan
+## sobre  
+Este projeto visa visualizar o funcionamento da classe  
+completableFuture do Java afim de observar seu funcionamenteo interno  
+Apesar de nao ter consequido chegar a solucao otima   
+e posivel observar o funcinamento interno da classe   
+e como a classe original cria e agenda novas promessas 
+# Linguagems  
+- Java
+  
